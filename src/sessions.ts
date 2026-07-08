@@ -9,6 +9,26 @@ export interface ScreenshotRecord {
   takenAt: string;
 }
 
+export interface ConsoleErrorRecord {
+  text: string;
+  location?: string;
+  timestamp: string;
+}
+
+export interface PageErrorRecord {
+  message: string;
+  stack?: string;
+  timestamp: string;
+}
+
+export interface NetworkIssueRecord {
+  url: string;
+  status?: number;
+  statusText?: string;
+  failure?: string;
+  timestamp: string;
+}
+
 export interface EvidenceSession {
   id: string;
   featureName: string;
@@ -20,10 +40,20 @@ export interface EvidenceSession {
   startedAt: string;
   lastActivity: number;
   screenshots: ScreenshotRecord[];
+  consoleErrors: ConsoleErrorRecord[];
+  pageErrors: PageErrorRecord[];
+  networkIssues: NetworkIssueRecord[];
 }
 
 const IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 const IDLE_CHECK_INTERVAL_MS = 60 * 1000;
+// Bounds how much a single chatty page can bloat manifest.json; oldest entries drop first.
+const MAX_LOGGED_ENTRIES = 200;
+
+function pushCapped<T>(arr: T[], item: T): void {
+  arr.push(item);
+  if (arr.length > MAX_LOGGED_ENTRIES) arr.shift();
+}
 
 function sanitize(name: string): string {
   const cleaned = name.replace(/[^a-zA-Z0-9-_]/g, "-").replace(/-+/g, "-").slice(0, 80);
@@ -70,6 +100,39 @@ export class SessionManager {
     await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
     const page = await context.newPage();
 
+    const consoleErrors: ConsoleErrorRecord[] = [];
+    const pageErrors: PageErrorRecord[] = [];
+    const networkIssues: NetworkIssueRecord[] = [];
+
+    page.on("console", (msg) => {
+      if (msg.type() !== "error") return;
+      const location = msg.location();
+      pushCapped(consoleErrors, {
+        text: msg.text(),
+        location: location.url ? `${location.url}:${location.lineNumber}` : undefined,
+        timestamp: new Date().toISOString(),
+      });
+    });
+    page.on("pageerror", (error) => {
+      pushCapped(pageErrors, { message: error.message, stack: error.stack, timestamp: new Date().toISOString() });
+    });
+    page.on("requestfailed", (request) => {
+      pushCapped(networkIssues, {
+        url: request.url(),
+        failure: request.failure()?.errorText,
+        timestamp: new Date().toISOString(),
+      });
+    });
+    page.on("response", (response) => {
+      if (response.status() < 400) return;
+      pushCapped(networkIssues, {
+        url: response.url(),
+        status: response.status(),
+        statusText: response.statusText(),
+        timestamp: new Date().toISOString(),
+      });
+    });
+
     const session: EvidenceSession = {
       id,
       featureName,
@@ -81,12 +144,18 @@ export class SessionManager {
       startedAt: new Date().toISOString(),
       lastActivity: Date.now(),
       screenshots: [],
+      consoleErrors,
+      pageErrors,
+      networkIssues,
     };
     this.sessions.set(id, session);
     return session;
   }
 
-  async finish(sessionId: string, summary?: string): Promise<{ evidenceDir: string }> {
+  async finish(
+    sessionId: string,
+    summary?: string,
+  ): Promise<{ evidenceDir: string; consoleErrorCount: number; pageErrorCount: number; networkIssueCount: number }> {
     const session = this.get(sessionId);
     return this.finalize(session, summary, "finished");
   }
@@ -95,7 +164,7 @@ export class SessionManager {
     session: EvidenceSession,
     summary: string | undefined,
     reason: "finished" | "idle-timeout" | "shutdown",
-  ): Promise<{ evidenceDir: string }> {
+  ): Promise<{ evidenceDir: string; consoleErrorCount: number; pageErrorCount: number; networkIssueCount: number }> {
     this.sessions.delete(session.id);
 
     const tracePath = path.join(session.evidenceDir, "trace.zip");
@@ -153,10 +222,18 @@ export class SessionManager {
       screenshots: session.screenshots,
       video: videoFile,
       trace: traceFile,
+      consoleErrors: session.consoleErrors,
+      pageErrors: session.pageErrors,
+      networkIssues: session.networkIssues,
     };
     await writeFile(path.join(session.evidenceDir, "manifest.json"), JSON.stringify(manifest, null, 2));
 
-    return { evidenceDir: session.evidenceDir };
+    return {
+      evidenceDir: session.evidenceDir,
+      consoleErrorCount: session.consoleErrors.length,
+      pageErrorCount: session.pageErrors.length,
+      networkIssueCount: session.networkIssues.length,
+    };
   }
 
   private async reapIdleSessions(): Promise<void> {

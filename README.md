@@ -54,11 +54,17 @@ Consuming projects should add `.evidence/` to their own `.gitignore`.
 | `fill({ sessionId, selector, value, timeout? })` | Fills a form field. |
 | `wait_for({ sessionId, selector?, text?, state?, timeout? })` | Waits for an element to reach a state (default `visible`). |
 | `screenshot({ sessionId, name, fullPage? })` | Saves a PNG immediately into the evidence dir. Survives even if the session later errors. |
-| `finish_evidence_session({ sessionId, summary? })` | Closes the context, finalizes `video.webm`, stops tracing (`trace.zip`), writes `manifest.json`. |
+| `finish_evidence_session({ sessionId, summary? })` | Closes the context, finalizes `video.webm`, stops tracing (`trace.zip`), writes `manifest.json`, returns counts of console/page/network errors seen. |
 
 A session left open for 10 minutes with no tool calls is auto-finished. The
 server also flushes any open sessions on `SIGINT`/`SIGTERM` so evidence isn't
 lost if the process is killed mid-run.
+
+Every session also passively records, into `manifest.json`, anything a
+screenshot or video wouldn't show: browser console errors, uncaught page
+exceptions, and failed or non-2xx network requests. `finish_evidence_session`
+reports the counts directly so a silent failure (a broken API call behind a
+UI that "looks fine") doesn't slip through unnoticed.
 
 ### Example
 
