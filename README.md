@@ -23,7 +23,7 @@ npx playwright install chromium
 Per-user (available in every project):
 
 ```bash
-claude mcp add --scope user evidence -- npx -y github:<your-github-username>/mcp-evidence
+claude mcp add --scope user evidence -- npx -y github:meovan07/mcp-evidence
 ```
 
 Or per-project, add to `.mcp.json`:
@@ -33,15 +33,14 @@ Or per-project, add to `.mcp.json`:
   "mcpServers": {
     "evidence": {
       "command": "npx",
-      "args": ["-y", "github:<your-github-username>/mcp-evidence"]
+      "args": ["-y", "github:meovan07/mcp-evidence"]
     }
   }
 }
 ```
 
-This is a **private** repo, so the machine running `npx` needs git/GitHub
-credentials that can clone it (an SSH key registered with GitHub, or the `gh`
-credential helper).
+This repo is public, so no GitHub credentials are needed on the machine
+running `npx`.
 
 Consuming projects should add `.evidence/` to their own `.gitignore`.
 
