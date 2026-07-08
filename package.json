@@ -1,0 +1,31 @@
+{
+  "name": "mcp-evidence",
+  "version": "0.1.0",
+  "description": "MCP server that drives a browser with Playwright and packages screenshots/video/trace as evidence a feature works.",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "mcp-evidence": "./dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepare": "npm run build",
+    "start": "node dist/index.js",
+    "dev": "tsc -p tsconfig.json --watch"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "playwright": "^1.61.1",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "typescript": "^5.9.2"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
