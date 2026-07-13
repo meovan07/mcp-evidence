@@ -54,17 +54,24 @@ Consuming projects should add `.evidence/` to their own `.gitignore`.
 | `fill({ sessionId, selector, value, timeout? })` | Fills a form field. |
 | `wait_for({ sessionId, selector?, text?, state?, timeout? })` | Waits for an element to reach a state (default `visible`). |
 | `screenshot({ sessionId, name, fullPage? })` | Saves a PNG immediately into the evidence dir. Survives even if the session later errors. |
-| `finish_evidence_session({ sessionId, summary? })` | Closes the context, finalizes `video.webm`, stops tracing (`trace.zip`), writes `manifest.json`, returns counts of console/page/network errors seen. |
+| `finish_evidence_session({ sessionId, summary? })` | Closes the context, finalizes `video.webm`, stops tracing (`trace.zip`), writes `network.json` and `manifest.json`, returns counts of console/page/network errors seen. |
 
 A session left open for 10 minutes with no tool calls is auto-finished. The
 server also flushes any open sessions on `SIGINT`/`SIGTERM` so evidence isn't
 lost if the process is killed mid-run.
 
 Every session also passively records, into `manifest.json`, anything a
-screenshot or video wouldn't show: browser console errors, uncaught page
-exceptions, and failed or non-2xx network requests. `finish_evidence_session`
-reports the counts directly so a silent failure (a broken API call behind a
-UI that "looks fine") doesn't slip through unnoticed.
+screenshot or video wouldn't show: browser console errors and uncaught page
+exceptions. `finish_evidence_session` reports the counts directly so a
+silent failure doesn't slip through unnoticed.
+
+Every request the page makes — not just failures — is also logged to
+`network.json` (method, url, resource type, status, timing), the same data
+Chrome DevTools' Network tab shows. `manifest.json` keeps a filtered
+`networkIssues` list (non-2xx/failed only) plus a `networkRequestCount` for a
+quick read without opening the full log. (The `trace.zip` already had this
+same data in Playwright's own trace viewer; this just makes it directly
+readable by the calling agent too, not only a human opening the trace UI.)
 
 ### Example
 
@@ -87,6 +94,7 @@ Resulting evidence directory:
   0-confirmation.png
   video.webm
   trace.zip
+  network.json
   manifest.json
 ```
 

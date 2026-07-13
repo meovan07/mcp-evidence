@@ -159,24 +159,24 @@ export function registerTools(server: McpServer, sessions: SessionManager): void
     {
       title: "Finish evidence session",
       description:
-        "Closes the browser context (finalizing the video), stops tracing, writes manifest.json, and returns " +
-        "the evidence folder path plus counts of console errors, uncaught page errors, and failed/erroring " +
-        "network requests seen during the session. Always call this at the end of a verification run.",
+        "Closes the browser context (finalizing the video), stops tracing, writes network.json (every request " +
+        "made during the session) and manifest.json, and returns the evidence folder path plus counts of " +
+        "console errors, uncaught page errors, and network requests/issues seen. Always call this at the end " +
+        "of a verification run.",
       inputSchema: {
         sessionId: z.string(),
         summary: z.string().optional().describe("Short human-readable summary of what was verified"),
       },
     },
     async ({ sessionId, summary }) => {
-      const { evidenceDir, consoleErrorCount, pageErrorCount, networkIssueCount } = await sessions.finish(
-        sessionId,
-        summary,
-      );
+      const { evidenceDir, consoleErrorCount, pageErrorCount, networkIssueCount, networkRequestCount } =
+        await sessions.finish(sessionId, summary);
       return text(
         `Finished evidence session. Evidence saved to: ${evidenceDir}\n` +
-          `Console errors: ${consoleErrorCount}, page errors: ${pageErrorCount}, network issues: ${networkIssueCount}` +
+          `Console errors: ${consoleErrorCount}, page errors: ${pageErrorCount}, ` +
+          `network requests: ${networkRequestCount} (${networkIssueCount} non-2xx/failed, see network.json for the full list)` +
           (consoleErrorCount + pageErrorCount + networkIssueCount > 0
-            ? " (see manifest.json for details)"
+            ? "\nSee manifest.json / network.json for details."
             : ""),
       );
     },

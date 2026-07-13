@@ -21,10 +21,13 @@ export interface PageErrorRecord {
   timestamp: string;
 }
 
-export interface NetworkIssueRecord {
+export interface NetworkRequestRecord {
+  method: string;
   url: string;
+  resourceType: string;
   status?: number;
   statusText?: string;
+  ok: boolean;
   failure?: string;
   timestamp: string;
 }
@@ -42,17 +45,19 @@ export interface EvidenceSession {
   screenshots: ScreenshotRecord[];
   consoleErrors: ConsoleErrorRecord[];
   pageErrors: PageErrorRecord[];
-  networkIssues: NetworkIssueRecord[];
+  networkLog: NetworkRequestRecord[];
 }
 
 const IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 const IDLE_CHECK_INTERVAL_MS = 60 * 1000;
 // Bounds how much a single chatty page can bloat manifest.json; oldest entries drop first.
 const MAX_LOGGED_ENTRIES = 200;
+// The network log records every request (not just failures), so a busy page needs more headroom.
+const MAX_NETWORK_LOG_ENTRIES = 1000;
 
-function pushCapped<T>(arr: T[], item: T): void {
+function pushCapped<T>(arr: T[], item: T, cap: number = MAX_LOGGED_ENTRIES): void {
   arr.push(item);
-  if (arr.length > MAX_LOGGED_ENTRIES) arr.shift();
+  if (arr.length > cap) arr.shift();
 }
 
 function sanitize(name: string): string {
@@ -102,7 +107,7 @@ export class SessionManager {
 
     const consoleErrors: ConsoleErrorRecord[] = [];
     const pageErrors: PageErrorRecord[] = [];
-    const networkIssues: NetworkIssueRecord[] = [];
+    const networkLog: NetworkRequestRecord[] = [];
 
     page.on("console", (msg) => {
       if (msg.type() !== "error") return;
@@ -116,21 +121,37 @@ export class SessionManager {
     page.on("pageerror", (error) => {
       pushCapped(pageErrors, { message: error.message, stack: error.stack, timestamp: new Date().toISOString() });
     });
-    page.on("requestfailed", (request) => {
-      pushCapped(networkIssues, {
-        url: request.url(),
-        failure: request.failure()?.errorText,
-        timestamp: new Date().toISOString(),
-      });
-    });
+    // Covers every request that got a response, successful or not — the full "network tab" record.
     page.on("response", (response) => {
-      if (response.status() < 400) return;
-      pushCapped(networkIssues, {
-        url: response.url(),
-        status: response.status(),
-        statusText: response.statusText(),
-        timestamp: new Date().toISOString(),
-      });
+      const request = response.request();
+      pushCapped(
+        networkLog,
+        {
+          method: request.method(),
+          url: response.url(),
+          resourceType: request.resourceType(),
+          status: response.status(),
+          statusText: response.statusText(),
+          ok: response.ok(),
+          timestamp: new Date().toISOString(),
+        },
+        MAX_NETWORK_LOG_ENTRIES,
+      );
+    });
+    // Covers requests that never got a response at all (DNS failure, connection refused, blocked, etc.).
+    page.on("requestfailed", (request) => {
+      pushCapped(
+        networkLog,
+        {
+          method: request.method(),
+          url: request.url(),
+          resourceType: request.resourceType(),
+          ok: false,
+          failure: request.failure()?.errorText,
+          timestamp: new Date().toISOString(),
+        },
+        MAX_NETWORK_LOG_ENTRIES,
+      );
     });
 
     const session: EvidenceSession = {
@@ -146,7 +167,7 @@ export class SessionManager {
       screenshots: [],
       consoleErrors,
       pageErrors,
-      networkIssues,
+      networkLog,
     };
     this.sessions.set(id, session);
     return session;
@@ -155,7 +176,13 @@ export class SessionManager {
   async finish(
     sessionId: string,
     summary?: string,
-  ): Promise<{ evidenceDir: string; consoleErrorCount: number; pageErrorCount: number; networkIssueCount: number }> {
+  ): Promise<{
+    evidenceDir: string;
+    consoleErrorCount: number;
+    pageErrorCount: number;
+    networkIssueCount: number;
+    networkRequestCount: number;
+  }> {
     const session = this.get(sessionId);
     return this.finalize(session, summary, "finished");
   }
@@ -164,7 +191,13 @@ export class SessionManager {
     session: EvidenceSession,
     summary: string | undefined,
     reason: "finished" | "idle-timeout" | "shutdown",
-  ): Promise<{ evidenceDir: string; consoleErrorCount: number; pageErrorCount: number; networkIssueCount: number }> {
+  ): Promise<{
+    evidenceDir: string;
+    consoleErrorCount: number;
+    pageErrorCount: number;
+    networkIssueCount: number;
+    networkRequestCount: number;
+  }> {
     this.sessions.delete(session.id);
 
     const tracePath = path.join(session.evidenceDir, "trace.zip");
@@ -212,6 +245,9 @@ export class SessionManager {
       console.error(`Failed to close browser for session ${session.id}:`, error);
     }
 
+    const networkIssues = session.networkLog.filter((entry) => !entry.ok);
+    await writeFile(path.join(session.evidenceDir, "network.json"), JSON.stringify(session.networkLog, null, 2));
+
     const manifest = {
       featureName: session.featureName,
       baseUrl: session.baseUrl,
@@ -224,7 +260,9 @@ export class SessionManager {
       trace: traceFile,
       consoleErrors: session.consoleErrors,
       pageErrors: session.pageErrors,
-      networkIssues: session.networkIssues,
+      networkIssues,
+      network: "network.json",
+      networkRequestCount: session.networkLog.length,
     };
     await writeFile(path.join(session.evidenceDir, "manifest.json"), JSON.stringify(manifest, null, 2));
 
@@ -232,7 +270,8 @@ export class SessionManager {
       evidenceDir: session.evidenceDir,
       consoleErrorCount: session.consoleErrors.length,
       pageErrorCount: session.pageErrors.length,
-      networkIssueCount: session.networkIssues.length,
+      networkIssueCount: networkIssues.length,
+      networkRequestCount: session.networkLog.length,
     };
   }
 
