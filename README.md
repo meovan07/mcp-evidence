@@ -48,7 +48,7 @@ Consuming projects should add `.evidence/` to their own `.gitignore`.
 
 | Tool | Purpose |
 |---|---|
-| `start_evidence_session({ featureName, baseUrl? })` | Launches a Chromium context with video + trace recording on. Returns `sessionId`. |
+| `start_evidence_session({ featureName, baseUrl?, browser? })` | Launches a browser context with video + trace recording on. Returns `sessionId`. |
 | `navigate({ sessionId, url })` | Goes to `url` (resolved against `baseUrl` if relative). |
 | `click({ sessionId, selector? , role?, name?, timeout? })` | Clicks an element, located by CSS/text `selector` or ARIA `role`/`name`. |
 | `fill({ sessionId, selector, value, timeout? })` | Fills a form field. |
@@ -60,6 +60,21 @@ Consuming projects should add `.evidence/` to their own `.gitignore`.
 A session left open for 10 minutes with no tool calls is auto-finished. The
 server also flushes any open sessions on `SIGINT`/`SIGTERM` so evidence isn't
 lost if the process is killed mid-run.
+
+### Browser choice
+
+`start_evidence_session` defaults to Chromium. Pass `browser: "firefox"` or
+`browser: "webkit"` to use a different engine — `webkit` is the open-source
+engine behind Safari, the closest available option for catching
+Safari-specific bugs (though not a literal Safari build; some macOS-only
+behavior like Intelligent Tracking Prevention may differ slightly). Install
+the extra engines once per machine:
+
+```bash
+npx playwright install webkit firefox
+```
+
+`manifest.json` records which engine a session used (`browserEngine`).
 
 Every session also passively records, into `manifest.json`, anything a
 screenshot or video wouldn't show: browser console errors and uncaught page

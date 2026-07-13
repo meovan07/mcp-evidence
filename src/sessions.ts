@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { type Browser, type BrowserContext, type Page, chromium } from "playwright";
+import { type Browser, type BrowserContext, type Page, chromium, firefox, webkit } from "playwright";
+
+export type BrowserEngine = "chromium" | "firefox" | "webkit";
+
+const LAUNCHERS = { chromium, firefox, webkit } as const;
 
 export interface ScreenshotRecord {
   name: string;
@@ -36,6 +40,7 @@ export interface EvidenceSession {
   id: string;
   featureName: string;
   baseUrl?: string;
+  browserEngine: BrowserEngine;
   browser: Browser;
   context: BrowserContext;
   page: Page;
@@ -92,13 +97,13 @@ export class SessionManager {
     return `${index}-${sanitize(name)}.png`;
   }
 
-  async start(featureName: string, baseUrl?: string): Promise<EvidenceSession> {
+  async start(featureName: string, baseUrl?: string, browserEngine: BrowserEngine = "chromium"): Promise<EvidenceSession> {
     const id = randomUUID();
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
     const evidenceDir = path.join(process.cwd(), ".evidence", sanitize(featureName), timestamp);
     await mkdir(evidenceDir, { recursive: true });
 
-    const browser = await chromium.launch();
+    const browser = await LAUNCHERS[browserEngine].launch();
     const context = await browser.newContext({
       recordVideo: { dir: evidenceDir },
     });
@@ -158,6 +163,7 @@ export class SessionManager {
       id,
       featureName,
       baseUrl,
+      browserEngine,
       browser,
       context,
       page,
@@ -251,6 +257,7 @@ export class SessionManager {
     const manifest = {
       featureName: session.featureName,
       baseUrl: session.baseUrl,
+      browserEngine: session.browserEngine,
       startedAt: session.startedAt,
       finishedAt: new Date().toISOString(),
       endReason: reason,

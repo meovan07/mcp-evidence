@@ -36,17 +36,26 @@ export function registerTools(server: McpServer, sessions: SessionManager): void
     {
       title: "Start evidence session",
       description:
-        "Launches a Chromium browser context with video and trace recording enabled, and creates an " +
-        "evidence directory under `.evidence/<featureName>/<timestamp>/` in the current project. Returns a " +
+        "Launches a browser context (Chromium by default) with video and trace recording enabled, and creates " +
+        "an evidence directory under `.evidence/<featureName>/<timestamp>/` in the current project. Returns a " +
         "sessionId to pass to the other tools. Call finish_evidence_session when done to finalize the recording.",
       inputSchema: {
         featureName: z.string().min(1).describe("Short name for the feature being verified, used in the evidence path"),
         baseUrl: z.string().url().optional().describe("Base URL of the app under test; relative navigate() URLs resolve against this"),
+        browser: z
+          .enum(["chromium", "firefox", "webkit"])
+          .optional()
+          .describe(
+            "Browser engine to use (default chromium). `webkit` is the open-source engine behind Safari — " +
+              "closest available option for testing Safari-specific behavior, though not a literal Safari build.",
+          ),
       },
     },
-    async ({ featureName, baseUrl }) => {
-      const session = await sessions.start(featureName, baseUrl);
-      return text(`Started evidence session ${session.id}\nEvidence directory: ${session.evidenceDir}`);
+    async ({ featureName, baseUrl, browser }) => {
+      const session = await sessions.start(featureName, baseUrl, browser);
+      return text(
+        `Started evidence session ${session.id} (${session.browserEngine})\nEvidence directory: ${session.evidenceDir}`,
+      );
     },
   );
 
