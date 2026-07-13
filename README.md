@@ -53,6 +53,7 @@ Consuming projects should add `.evidence/` to their own `.gitignore`.
 | `click({ sessionId, selector? , role?, name?, timeout? })` | Clicks an element, located by CSS/text `selector` or ARIA `role`/`name`. |
 | `fill({ sessionId, selector, value, timeout? })` | Fills a form field. |
 | `wait_for({ sessionId, selector?, text?, state?, timeout? })` | Waits for an element to reach a state (default `visible`). |
+| `set_network({ sessionId, offline })` | Simulates losing (`offline: true`) or restoring (`offline: false`) internet connectivity, for testing error banners/retry/reconnect behavior. |
 | `screenshot({ sessionId, name, fullPage? })` | Saves a PNG immediately into the evidence dir. Survives even if the session later errors. |
 | `finish_evidence_session({ sessionId, summary? })` | Closes the context, finalizes `video.webm`, stops tracing (`trace.zip`), writes `network.json` and `manifest.json`, returns counts of console/page/network errors seen. |
 

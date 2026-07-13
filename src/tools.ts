@@ -134,6 +134,26 @@ export function registerTools(server: McpServer, sessions: SessionManager): void
   );
 
   server.registerTool(
+    "set_network",
+    {
+      title: "Set network",
+      description:
+        "Simulates the browser going offline or back online, for testing how the app handles lost/restored " +
+        "connectivity (error banners, retry logic, reconnect behavior, etc.). Affects the whole session's " +
+        "browser context, including subsequent navigate/click/fill calls.",
+      inputSchema: {
+        sessionId: z.string(),
+        offline: z.boolean().describe("true to simulate no internet connection, false to restore it"),
+      },
+    },
+    async ({ sessionId, offline }) => {
+      const session = sessions.get(sessionId);
+      await session.context.setOffline(offline);
+      return text(offline ? "Network set to offline" : "Network restored (online)");
+    },
+  );
+
+  server.registerTool(
     "screenshot",
     {
       title: "Screenshot",
