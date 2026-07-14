@@ -267,6 +267,31 @@ export class SessionManager {
     await session.page.locator(args.source).dragTo(session.page.locator(args.target), { timeout: args.timeout });
   }
 
+  /**
+   * For distance-based drag gestures with no drop target — resize handles, sliders — as opposed to
+   * drag()'s element-to-element dragTo(). Uses the real mouse API (dispatched via CDP, trusted events),
+   * not JS-dispatched synthetic events: some UI libraries (e.g. Radix's pointer-event-based handlers)
+   * don't respond to untrusted synthetic events at all.
+   */
+  async dragByOffset(
+    sessionId: string,
+    args: { selector: string; dx: number; dy: number; steps?: number },
+  ): Promise<void> {
+    const session = this.get(sessionId);
+    const box = await session.page.locator(args.selector).boundingBox();
+    if (!box) throw new Error(`Element not visible: ${args.selector}`);
+    const startX = box.x + box.width / 2;
+    const startY = box.y + box.height / 2;
+    const steps = args.steps ?? 10;
+
+    await session.page.mouse.move(startX, startY);
+    await session.page.mouse.down();
+    for (let i = 1; i <= steps; i++) {
+      await session.page.mouse.move(startX + (args.dx * i) / steps, startY + (args.dy * i) / steps);
+    }
+    await session.page.mouse.up();
+  }
+
   async evaluate(sessionId: string, script: string): Promise<unknown> {
     const session = this.get(sessionId);
     return session.page.evaluate(script);

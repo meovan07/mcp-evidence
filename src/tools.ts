@@ -165,9 +165,10 @@ export function registerTools(server: McpServer, sessions: SessionManager): void
       description:
         "Drags a source element onto a target element, each located by CSS/text `selector` or ARIA " +
         "`role`+`name`. Fires native HTML5 drag events, so it works with most drag-and-drop libraries " +
-        "(React DnD, Sortable.js, native draggable elements). A few custom implementations that bypass " +
-        "native HTML5 drag events (canvas-based, pointer-events-only) may not respond to this — say so if " +
-        "you hit one and a lower-level mouse-simulation fallback can be added.",
+        "(React DnD, Sortable.js, native draggable elements). For a drag with no drop target — a resize " +
+        "handle, a slider — use drag_by_offset instead. A few custom implementations that bypass native " +
+        "HTML5 drag events entirely (canvas-based, pointer-events-only) may not respond to either — check " +
+        "with snapshot() first if a drag isn't having an effect.",
       inputSchema: {
         sessionId: z.string(),
         sourceSelector: z.string().optional(),
@@ -185,6 +186,29 @@ export function registerTools(server: McpServer, sessions: SessionManager): void
       const target = resolveClickLocator(session.page, { selector: targetSelector, role: targetRole, name: targetName });
       await source.dragTo(target, { timeout });
       return text(`Dragged ${sourceSelector ?? sourceRole} to ${targetSelector ?? targetRole}`);
+    },
+  );
+
+  server.registerTool(
+    "drag_by_offset",
+    {
+      title: "Drag by offset",
+      description:
+        "Drags an element by a pixel distance (dx, dy) with no drop target — for resize handles, sliders, " +
+        "swipe-to-reveal, and similar gestures that drag() (element-to-element) doesn't fit. Uses real mouse " +
+        "events dispatched via CDP (trusted, not JS-synthesized), so it works with pointer-event-based UI " +
+        "libraries (e.g. Radix) that ignore untrusted synthetic events.",
+      inputSchema: {
+        sessionId: z.string(),
+        selector: z.string().min(1).describe("Element to grab (e.g. the drag handle)"),
+        dx: z.number().describe("Horizontal distance to drag, in pixels (positive = right)"),
+        dy: z.number().describe("Vertical distance to drag, in pixels (positive = down)"),
+        steps: z.number().optional().describe("Number of intermediate mousemove steps (default 10) — more steps looks more like a real drag to gesture-sensitive UI"),
+      },
+    },
+    async ({ sessionId, selector, dx, dy, steps }) => {
+      await sessions.dragByOffset(sessionId, { selector, dx, dy, steps });
+      return text(`Dragged ${selector} by (${dx}, ${dy})`);
     },
   );
 

@@ -53,6 +53,7 @@ Consuming projects should add `.evidence/` to their own `.gitignore`.
 | `click({ sessionId, selector? , role?, name?, timeout? })` | Clicks an element, located by CSS/text `selector` or ARIA `role`/`name`. |
 | `fill({ sessionId, selector, value, timeout? })` | Fills a form field. |
 | `drag({ sessionId, sourceSelector/Role/Name, targetSelector/Role/Name, timeout? })` | Drags a source element onto a target, firing native HTML5 drag events. |
+| `drag_by_offset({ sessionId, selector, dx, dy, steps? })` | Drags an element by a pixel distance — no drop target. For resize handles, sliders, swipe gestures. |
 | `wait_for({ sessionId, selector?, text?, state?, timeout? })` | Waits for an element to reach a state (default `visible`). |
 | `set_network({ sessionId, offline })` | Simulates losing (`offline: true`) or restoring (`offline: false`) internet connectivity, for testing error banners/retry/reconnect behavior. |
 | `set_display_mode({ sessionId, mode })` | Mid-session version of `displayMode` above — see PWA section below. |
@@ -198,6 +199,27 @@ form's submit button won't respond, immediately, instead of via minutes of
 click-timeout debugging). Pass `selector` to scope it to part of the page
 instead of the whole thing, or `boxes: false` to drop the bounding boxes
 if you only need structure.
+
+### Distance-based drag (`drag_by_offset`)
+
+`drag()` is element-to-element (drag *this* onto *that*) — built for
+reordering/drop-target interactions. Some gestures have no target element:
+a bottom-sheet resize handle, a slider, swipe-to-reveal. `drag_by_offset`
+grabs `selector` and moves the mouse by `(dx, dy)` pixels instead:
+
+```
+drag_by_offset({ sessionId, selector: "#resize-handle", dx: 0, dy: -250 })
+```
+
+It uses Playwright's real mouse API, dispatched via CDP as trusted OS-level
+input — not JS-synthesized `PointerEvent`s. That distinction matters: some
+UI libraries (Radix, among others) ignore untrusted synthetic events
+entirely, so a `dispatchEvent(new PointerEvent(...))` approach can silently
+no-op even though the element clearly has a `pointerdown` listener attached.
+Validated against both a native `<input type="range">` (jumped straight to
+its max when dragged past the track) and a custom `pointerdown`/
+`pointermove`-based drag handle (moved exactly the requested distance) —
+the same pattern that didn't respond to synthetic events in earlier testing.
 
 ### Example
 
