@@ -272,6 +272,15 @@ export class SessionManager {
     return session.page.evaluate(script);
   }
 
+  async snapshot(
+    sessionId: string,
+    args: { selector?: string; boxes?: boolean; mode?: "ai" | "default" },
+  ): Promise<string> {
+    const session = this.get(sessionId);
+    const locator = args.selector ? session.page.locator(args.selector) : session.page.locator("body");
+    return locator.ariaSnapshot({ boxes: args.boxes ?? true, mode: args.mode ?? "ai" });
+  }
+
   async finish(
     sessionId: string,
     summary?: string,

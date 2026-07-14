@@ -57,6 +57,7 @@ Consuming projects should add `.evidence/` to their own `.gitignore`.
 | `set_network({ sessionId, offline })` | Simulates losing (`offline: true`) or restoring (`offline: false`) internet connectivity, for testing error banners/retry/reconnect behavior. |
 | `set_display_mode({ sessionId, mode })` | Mid-session version of `displayMode` above — see PWA section below. |
 | `evaluate({ sessionId, script })` | Runs a JS expression in the page, returns the (JSON-serializable) result. |
+| `snapshot({ sessionId, selector?, boxes? })` | Returns the accessibility tree as YAML (role, name, ref, bounding box) — see below. |
 | `screenshot({ sessionId, name, fullPage? })` | Saves a PNG immediately into the evidence dir. Survives even if the session later errors. |
 | `finish_evidence_session({ sessionId, summary? })` | Closes the context, finalizes `video.webm`, stops tracing (`trace.zip`), writes `network.json` and `manifest.json`, returns counts of console/page/network errors seen. |
 
@@ -173,6 +174,30 @@ CSS included — there's no automatable substitute for genuinely installing
 it (desktop: Chrome's `--app=<url>` launch mode; mobile: an actual
 home-screen install on a real or emulated device), which is outside this
 tool's scope.
+
+### Accessibility snapshot (`snapshot`)
+
+Reach for this before reaching for `evaluate` or trial-and-error `click`
+calls to figure out what's on a page. It returns Playwright's aria snapshot
+— a YAML tree of role, accessible name, a stable `ref`, and (by default) a
+bounding box for every element:
+
+```
+snapshot({ sessionId })
+  -> - generic [ref=e1] [box=0,0,393,727]:
+       - button "Ask Coach..." [ref=e45] [box=40,412,321,24]
+       - button [disabled] [box=337,775,40,40]:
+           - img [box=347,785,20,20]
+```
+
+Two things this surfaces for free that a screenshot or DOM query won't:
+elements with **missing accessible names** (the second button above is
+icon-only with no `aria-label` — a real accessibility gap, not just
+inconvenient for automation), and **disabled state** (explains why a filled
+form's submit button won't respond, immediately, instead of via minutes of
+click-timeout debugging). Pass `selector` to scope it to part of the page
+instead of the whole thing, or `boxes: false` to drop the bounding boxes
+if you only need structure.
 
 ### Example
 

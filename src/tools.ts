@@ -270,6 +270,29 @@ export function registerTools(server: McpServer, sessions: SessionManager): void
   );
 
   server.registerTool(
+    "snapshot",
+    {
+      title: "Accessibility snapshot",
+      description:
+        "Returns the page's accessibility tree as YAML (role, accessible name, state — e.g. `button \"Send\" " +
+        "[ref=e12] [box=337,671,40,40]`), scoped to `selector` if given, otherwise the whole page. Much cheaper " +
+        "and more reliable than a screenshot for figuring out what's actually on a page and how to target it — " +
+        "use this instead of guessing at selectors via evaluate() or click() trial-and-error. Also surfaces " +
+        "elements with missing/empty accessible names for free (an accessibility gap, e.g. an icon-only button " +
+        "with no aria-label).",
+      inputSchema: {
+        sessionId: z.string(),
+        selector: z.string().optional().describe("Scope the snapshot to this element instead of the whole page"),
+        boxes: z.boolean().optional().describe("Include each element's bounding box as [box=x,y,width,height] (default true)"),
+      },
+    },
+    async ({ sessionId, selector, boxes }) => {
+      const result = await sessions.snapshot(sessionId, { selector, boxes });
+      return text(result);
+    },
+  );
+
+  server.registerTool(
     "screenshot",
     {
       title: "Screenshot",
