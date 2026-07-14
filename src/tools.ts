@@ -49,12 +49,24 @@ export function registerTools(server: McpServer, sessions: SessionManager): void
             "Browser engine to use (default chromium). `webkit` is the open-source engine behind Safari — " +
               "closest available option for testing Safari-specific behavior, though not a literal Safari build.",
           ),
+        storageStatePath: z
+          .string()
+          .optional()
+          .describe(
+            "Path to a storage-state JSON file (cookies + localStorage) to reuse an authenticated session, " +
+              "skipping a repeated login flow. If the file doesn't exist yet, the session starts fresh (e.g. " +
+              "logged out) and the file is created on finish_evidence_session, ready for the next run to reuse. " +
+              "If it exists, it's loaded so the session starts already signed in. Contains live session " +
+              "credentials — store it under a gitignored path, e.g. `.evidence/.auth/some-user.json`.",
+          ),
       },
     },
-    async ({ featureName, baseUrl, browser }) => {
-      const session = await sessions.start(featureName, baseUrl, browser);
+    async ({ featureName, baseUrl, browser, storageStatePath }) => {
+      const session = await sessions.start(featureName, baseUrl, browser, storageStatePath);
       return text(
-        `Started evidence session ${session.id} (${session.browserEngine})\nEvidence directory: ${session.evidenceDir}`,
+        `Started evidence session ${session.id} (${session.browserEngine})` +
+          (session.loadedStorageState ? " [loaded existing storage state, likely pre-authenticated]" : "") +
+          `\nEvidence directory: ${session.evidenceDir}`,
       );
     },
   );
@@ -198,7 +210,7 @@ export function registerTools(server: McpServer, sessions: SessionManager): void
       },
     },
     async ({ sessionId, summary }) => {
-      const { evidenceDir, consoleErrorCount, pageErrorCount, networkIssueCount, networkRequestCount } =
+      const { evidenceDir, consoleErrorCount, pageErrorCount, networkIssueCount, networkRequestCount, savedStorageState } =
         await sessions.finish(sessionId, summary);
       return text(
         `Finished evidence session. Evidence saved to: ${evidenceDir}\n` +
@@ -206,7 +218,8 @@ export function registerTools(server: McpServer, sessions: SessionManager): void
           `network requests: ${networkRequestCount} (${networkIssueCount} non-2xx/failed, see network.json for the full list)` +
           (consoleErrorCount + pageErrorCount + networkIssueCount > 0
             ? "\nSee manifest.json / network.json for details."
-            : ""),
+            : "") +
+          (savedStorageState ? "\nStorage state saved for reuse in future sessions." : ""),
       );
     },
   );

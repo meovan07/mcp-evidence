@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readdir, rename, writeFile } from "node:fs/promises";
+import { access, mkdir, readdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { type Browser, type BrowserContext, type Page, chromium, firefox, webkit } from "playwright";
 
@@ -51,6 +51,8 @@ export interface EvidenceSession {
   consoleErrors: ConsoleErrorRecord[];
   pageErrors: PageErrorRecord[];
   networkLog: NetworkRequestRecord[];
+  storageStatePath?: string;
+  loadedStorageState: boolean;
 }
 
 const IDLE_TIMEOUT_MS = 10 * 60 * 1000;
@@ -97,15 +99,32 @@ export class SessionManager {
     return `${index}-${sanitize(name)}.png`;
   }
 
-  async start(featureName: string, baseUrl?: string, browserEngine: BrowserEngine = "chromium"): Promise<EvidenceSession> {
+  async start(
+    featureName: string,
+    baseUrl?: string,
+    browserEngine: BrowserEngine = "chromium",
+    storageStatePath?: string,
+  ): Promise<EvidenceSession> {
     const id = randomUUID();
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
     const evidenceDir = path.join(process.cwd(), ".evidence", sanitize(featureName), timestamp);
     await mkdir(evidenceDir, { recursive: true });
 
+    const resolvedStorageStatePath = storageStatePath ? path.resolve(process.cwd(), storageStatePath) : undefined;
+    let loadedStorageState = false;
+    if (resolvedStorageStatePath) {
+      try {
+        await access(resolvedStorageStatePath);
+        loadedStorageState = true;
+      } catch {
+        // File doesn't exist yet — fine, this is presumably the first run. It'll be created on finish.
+      }
+    }
+
     const browser = await LAUNCHERS[browserEngine].launch();
     const context = await browser.newContext({
       recordVideo: { dir: evidenceDir },
+      storageState: loadedStorageState ? resolvedStorageStatePath : undefined,
     });
     await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
     const page = await context.newPage();
@@ -174,6 +193,8 @@ export class SessionManager {
       consoleErrors,
       pageErrors,
       networkLog,
+      storageStatePath: resolvedStorageStatePath,
+      loadedStorageState,
     };
     this.sessions.set(id, session);
     return session;
@@ -188,6 +209,7 @@ export class SessionManager {
     pageErrorCount: number;
     networkIssueCount: number;
     networkRequestCount: number;
+    savedStorageState: boolean;
   }> {
     const session = this.get(sessionId);
     return this.finalize(session, summary, "finished");
@@ -203,6 +225,7 @@ export class SessionManager {
     pageErrorCount: number;
     networkIssueCount: number;
     networkRequestCount: number;
+    savedStorageState: boolean;
   }> {
     this.sessions.delete(session.id);
 
@@ -213,6 +236,18 @@ export class SessionManager {
       traceFile = "trace.zip";
     } catch (error) {
       console.error(`Failed to stop tracing for session ${session.id}:`, error);
+    }
+
+    // Must happen before context.close() — storageState() needs the context still open.
+    let savedStorageState = false;
+    if (session.storageStatePath) {
+      try {
+        await mkdir(path.dirname(session.storageStatePath), { recursive: true });
+        await session.context.storageState({ path: session.storageStatePath });
+        savedStorageState = true;
+      } catch (error) {
+        console.error(`Failed to save storage state for session ${session.id}:`, error);
+      }
     }
 
     try {
@@ -270,6 +305,9 @@ export class SessionManager {
       networkIssues,
       network: "network.json",
       networkRequestCount: session.networkLog.length,
+      storageStatePath: session.storageStatePath,
+      loadedStorageState: session.loadedStorageState,
+      savedStorageState,
     };
     await writeFile(path.join(session.evidenceDir, "manifest.json"), JSON.stringify(manifest, null, 2));
 
@@ -279,6 +317,7 @@ export class SessionManager {
       pageErrorCount: session.pageErrors.length,
       networkIssueCount: networkIssues.length,
       networkRequestCount: session.networkLog.length,
+      savedStorageState,
     };
   }
 

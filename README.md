@@ -48,7 +48,7 @@ Consuming projects should add `.evidence/` to their own `.gitignore`.
 
 | Tool | Purpose |
 |---|---|
-| `start_evidence_session({ featureName, baseUrl?, browser? })` | Launches a browser context with video + trace recording on. Returns `sessionId`. |
+| `start_evidence_session({ featureName, baseUrl?, browser?, storageStatePath? })` | Launches a browser context with video + trace recording on. Returns `sessionId`. |
 | `navigate({ sessionId, url })` | Goes to `url` (resolved against `baseUrl` if relative). |
 | `click({ sessionId, selector? , role?, name?, timeout? })` | Clicks an element, located by CSS/text `selector` or ARIA `role`/`name`. |
 | `fill({ sessionId, selector, value, timeout? })` | Fills a form field. |
@@ -88,6 +88,35 @@ Chrome DevTools' Network tab shows. `manifest.json` keeps a filtered
 quick read without opening the full log. (The `trace.zip` already had this
 same data in Playwright's own trace viewer; this just makes it directly
 readable by the calling agent too, not only a human opening the trace UI.)
+
+### Reusing an authenticated session (`storageStatePath`)
+
+Every session starts from a completely clean browser context by default —
+good for testing a fresh visit, but it means any auth-gated flow (email OTP,
+password login) has to be redone from scratch on every single run. Pass
+`storageStatePath` to skip that:
+
+```
+start_evidence_session({ featureName: "checkout", baseUrl, storageStatePath: ".evidence/.auth/test-user.json" })
+```
+
+- **First run**: the file doesn't exist yet, so the session starts fresh
+  (logged out) as usual. Log in normally with `navigate`/`fill`/`click`
+  (using `wait_for_email` from `mcp-evidence-api` if it's an OTP flow). When
+  `finish_evidence_session` runs, the session's cookies + localStorage are
+  saved to that path.
+- **Every subsequent run** that passes the *same* `storageStatePath`: the
+  file exists, so the session loads it and starts already signed in —
+  `start_evidence_session`'s response says
+  `[loaded existing storage state, likely pre-authenticated]`. The state is
+  refreshed on every `finish_evidence_session` too, so rotating session
+  tokens stay current.
+
+**This file contains live session credentials** — treat it exactly like a
+password. Store it under `.evidence/` (already covered by the gitignore
+guidance below) or another path you've confirmed is gitignored, never commit
+it, and use a separate path per test account/user if you're testing more
+than one identity.
 
 ### Example
 
