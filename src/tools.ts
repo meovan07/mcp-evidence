@@ -1,10 +1,31 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Locator, Page } from "playwright";
 import { z } from "zod";
-import type { SessionManager } from "./sessions.js";
+import type { EvidenceSession, SessionManager } from "./sessions.js";
 
 function text(message: string) {
   return { content: [{ type: "text" as const, text: message }] };
+}
+
+// Locator-action failures (element not found/visible/stable) are the single most common thing
+// that sends an agent into a multi-round-trip debugging loop — fail, then call snapshot()/evaluate()
+// separately just to see what's actually on the page. Auto-attaching a compact snapshot to the
+// error collapses that into one round-trip.
+async function withDiagnostics<T>(session: EvidenceSession, fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    let diagnostic = "";
+    try {
+      const snap = await session.page.locator("body").ariaSnapshot({ mode: "ai", boxes: false, depth: 8 });
+      diagnostic = `\n\n--- accessibility snapshot at time of failure (auto-attached; call snapshot() for a fuller/scoped view) ---\n${snap}`;
+    } catch {
+      // Best-effort — if the page is in a state where even the diagnostic snapshot fails,
+      // just surface the original error.
+    }
+    throw new Error(`${message}${diagnostic}`);
+  }
 }
 
 function resolveClickLocator(
@@ -122,7 +143,7 @@ export function registerTools(server: McpServer, sessions: SessionManager): void
     "click",
     {
       title: "Click",
-      description: "Clicks an element, located either by CSS/text `selector` or by ARIA `role` (optionally with `name`).",
+      description: "Clicks an element, located either by CSS/text `selector` or by ARIA `role` (optionally with `name`). On failure, a compact accessibility snapshot of the page is auto-attached to the error — no need to call snapshot() separately to see why.",
       inputSchema: {
         sessionId: z.string(),
         selector: z.string().optional().describe("CSS or Playwright text selector"),
@@ -134,7 +155,7 @@ export function registerTools(server: McpServer, sessions: SessionManager): void
     async ({ sessionId, selector, role, name, timeout }) => {
       const session = sessions.get(sessionId);
       const locator = resolveClickLocator(session.page, { selector, role, name });
-      await locator.click({ timeout });
+      await withDiagnostics(session, () => locator.click({ timeout }));
       return text(`Clicked ${selector ?? `role=${role}${name ? ` name="${name}"` : ""}`}`);
     },
   );
@@ -143,7 +164,7 @@ export function registerTools(server: McpServer, sessions: SessionManager): void
     "fill",
     {
       title: "Fill",
-      description: "Fills a form field located by CSS selector with the given value.",
+      description: "Fills a form field located by CSS selector with the given value. On failure, a compact accessibility snapshot is auto-attached to the error.",
       inputSchema: {
         sessionId: z.string(),
         selector: z.string().min(1),
@@ -153,7 +174,7 @@ export function registerTools(server: McpServer, sessions: SessionManager): void
     },
     async ({ sessionId, selector, value, timeout }) => {
       const session = sessions.get(sessionId);
-      await session.page.locator(selector).fill(value, { timeout });
+      await withDiagnostics(session, () => session.page.locator(selector).fill(value, { timeout }));
       return text(`Filled ${selector}`);
     },
   );
@@ -167,8 +188,8 @@ export function registerTools(server: McpServer, sessions: SessionManager): void
         "`role`+`name`. Fires native HTML5 drag events, so it works with most drag-and-drop libraries " +
         "(React DnD, Sortable.js, native draggable elements). For a drag with no drop target — a resize " +
         "handle, a slider — use drag_by_offset instead. A few custom implementations that bypass native " +
-        "HTML5 drag events entirely (canvas-based, pointer-events-only) may not respond to either — check " +
-        "with snapshot() first if a drag isn't having an effect.",
+        "HTML5 drag events entirely (canvas-based, pointer-events-only) may not respond to either. On " +
+        "failure, a compact accessibility snapshot is auto-attached to the error.",
       inputSchema: {
         sessionId: z.string(),
         sourceSelector: z.string().optional(),
@@ -184,7 +205,7 @@ export function registerTools(server: McpServer, sessions: SessionManager): void
       const session = sessions.get(sessionId);
       const source = resolveClickLocator(session.page, { selector: sourceSelector, role: sourceRole, name: sourceName });
       const target = resolveClickLocator(session.page, { selector: targetSelector, role: targetRole, name: targetName });
-      await source.dragTo(target, { timeout });
+      await withDiagnostics(session, () => source.dragTo(target, { timeout }));
       return text(`Dragged ${sourceSelector ?? sourceRole} to ${targetSelector ?? targetRole}`);
     },
   );
@@ -197,7 +218,8 @@ export function registerTools(server: McpServer, sessions: SessionManager): void
         "Drags an element by a pixel distance (dx, dy) with no drop target — for resize handles, sliders, " +
         "swipe-to-reveal, and similar gestures that drag() (element-to-element) doesn't fit. Uses real mouse " +
         "events dispatched via CDP (trusted, not JS-synthesized), so it works with pointer-event-based UI " +
-        "libraries (e.g. Radix) that ignore untrusted synthetic events.",
+        "libraries (e.g. Radix) that ignore untrusted synthetic events. On failure, a compact accessibility " +
+        "snapshot is auto-attached to the error.",
       inputSchema: {
         sessionId: z.string(),
         selector: z.string().min(1).describe("Element to grab (e.g. the drag handle)"),
@@ -207,7 +229,8 @@ export function registerTools(server: McpServer, sessions: SessionManager): void
       },
     },
     async ({ sessionId, selector, dx, dy, steps }) => {
-      await sessions.dragByOffset(sessionId, { selector, dx, dy, steps });
+      const session = sessions.get(sessionId);
+      await withDiagnostics(session, () => sessions.dragByOffset(sessionId, { selector, dx, dy, steps }));
       return text(`Dragged ${selector} by (${dx}, ${dy})`);
     },
   );
@@ -216,7 +239,7 @@ export function registerTools(server: McpServer, sessions: SessionManager): void
     "wait_for",
     {
       title: "Wait for",
-      description: "Waits for an element (located by CSS `selector` or visible `text`) to reach the given state.",
+      description: "Waits for an element (located by CSS `selector` or visible `text`) to reach the given state. On timeout, a compact accessibility snapshot is auto-attached to the error.",
       inputSchema: {
         sessionId: z.string(),
         selector: z.string().optional(),
@@ -228,7 +251,7 @@ export function registerTools(server: McpServer, sessions: SessionManager): void
     async ({ sessionId, selector, text: textArg, state, timeout }) => {
       const session = sessions.get(sessionId);
       const locator = resolveWaitLocator(session.page, { selector, text: textArg });
-      await locator.waitFor({ state, timeout });
+      await withDiagnostics(session, () => locator.waitFor({ state, timeout }));
       return text(`${selector ?? textArg} reached state "${state}"`);
     },
   );

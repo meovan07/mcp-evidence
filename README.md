@@ -66,6 +66,16 @@ A session left open for 10 minutes with no tool calls is auto-finished. The
 server also flushes any open sessions on `SIGINT`/`SIGTERM` so evidence isn't
 lost if the process is killed mid-run.
 
+### Diagnostics on failure
+
+`click`, `fill`, `drag`, `drag_by_offset`, and `wait_for` are the tools most
+likely to fail while you're still figuring out an unfamiliar page — wrong
+selector, element not visible yet, wrong assumption about the DOM. Rather
+than returning a bare Playwright timeout, the error has a compact
+accessibility snapshot of the page auto-attached, so you can usually see
+what actually happened and correct course in the same round-trip instead of
+needing a follow-up `snapshot()`/`evaluate()` call just to find out why.
+
 ### Browser choice
 
 `start_evidence_session` defaults to Chromium. Pass `browser: "firefox"` or
