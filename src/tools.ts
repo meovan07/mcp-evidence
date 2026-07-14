@@ -7,6 +7,32 @@ function text(message: string) {
   return { content: [{ type: "text" as const, text: message }] };
 }
 
+const MAX_CALL_LOG_LINES = 6;
+// Playwright formats call logs for terminal display (dim/reset codes around each line) — pure
+// noise once it's going into a tool result instead of a terminal, and it adds up over a debugging
+// session since it repeats on every single failure.
+const ANSI_ESCAPE_PATTERN = /\x1b\[[0-9;]*m/g;
+
+// Playwright's actionability retry loop can produce call logs dozens of lines long (mostly
+// repeated "waiting for element to be visible, enabled and stable" spam) — that's rarely useful
+// signal and burns tokens on every failure. Keep the header and first few lines, drop the rest.
+function trimCallLog(rawMessage: string): string {
+  const message = rawMessage.replace(ANSI_ESCAPE_PATTERN, "");
+  const marker = "Call log:";
+  const idx = message.indexOf(marker);
+  if (idx === -1) return message;
+  const header = message.slice(0, idx).trimEnd();
+  const lines = message
+    .slice(idx + marker.length)
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length <= MAX_CALL_LOG_LINES) return message;
+  const kept = lines.slice(0, MAX_CALL_LOG_LINES);
+  const omitted = lines.length - MAX_CALL_LOG_LINES;
+  return `${header}\n${marker}\n  ${kept.join("\n  ")}\n  ... (${omitted} more call-log lines omitted, usually repeated actionability retries)`;
+}
+
 // Locator-action failures (element not found/visible/stable) are the single most common thing
 // that sends an agent into a multi-round-trip debugging loop — fail, then call snapshot()/evaluate()
 // separately just to see what's actually on the page. Auto-attaching a compact snapshot to the
@@ -15,7 +41,7 @@ async function withDiagnostics<T>(session: EvidenceSession, fn: () => Promise<T>
   try {
     return await fn();
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = trimCallLog(error instanceof Error ? error.message : String(error));
     let diagnostic = "";
     try {
       const snap = await session.page.locator("body").ariaSnapshot({ mode: "ai", boxes: false, depth: 8 });
@@ -343,20 +369,34 @@ export function registerTools(server: McpServer, sessions: SessionManager): void
     "screenshot",
     {
       title: "Screenshot",
-      description: "Takes a screenshot and saves it immediately into the evidence directory, so it survives even if the session later errors.",
+      description:
+        "Takes a screenshot and saves it immediately into the evidence directory, so it survives even if the " +
+        "session later errors. By default only returns the file path (cheap); pass `returnImage: true` to " +
+        "also get the image back inline in the response so it can be viewed directly without a separate " +
+        "file-read round-trip — costs meaningfully more tokens, so leave it off for routine evidence capture " +
+        "and use it when actually inspecting the result matters (e.g. debugging a visual issue right now).",
       inputSchema: {
         sessionId: z.string(),
         name: z.string().min(1).describe("Short label for this screenshot, used in the filename"),
         fullPage: z.boolean().optional().describe("Capture the full scrollable page instead of just the viewport"),
+        returnImage: z.boolean().optional().describe("Also return the image inline, not just its path (default false)"),
       },
     },
-    async ({ sessionId, name, fullPage }) => {
+    async ({ sessionId, name, fullPage, returnImage }) => {
       const session = sessions.get(sessionId);
       const filename = sessions.nextScreenshotFilename(session, name);
       const filePath = `${session.evidenceDir}/${filename}`;
-      await session.page.screenshot({ path: filePath, fullPage: fullPage ?? false });
+      const buffer = await session.page.screenshot({ path: filePath, fullPage: fullPage ?? false });
       session.screenshots.push({ name, path: filePath, takenAt: new Date().toISOString() });
-      return text(`Saved screenshot: ${filePath}`);
+      if (!returnImage) {
+        return text(`Saved screenshot: ${filePath}`);
+      }
+      return {
+        content: [
+          { type: "text" as const, text: `Saved screenshot: ${filePath}` },
+          { type: "image" as const, data: buffer.toString("base64"), mimeType: "image/png" },
+        ],
+      };
     },
   );
 

@@ -59,7 +59,7 @@ Consuming projects should add `.evidence/` to their own `.gitignore`.
 | `set_display_mode({ sessionId, mode })` | Mid-session version of `displayMode` above — see PWA section below. |
 | `evaluate({ sessionId, script })` | Runs a JS expression in the page, returns the (JSON-serializable) result. |
 | `snapshot({ sessionId, selector?, boxes? })` | Returns the accessibility tree as YAML (role, name, ref, bounding box) — see below. |
-| `screenshot({ sessionId, name, fullPage? })` | Saves a PNG immediately into the evidence dir. Survives even if the session later errors. |
+| `screenshot({ sessionId, name, fullPage?, returnImage? })` | Saves a PNG immediately into the evidence dir. Survives even if the session later errors. Pass `returnImage: true` to also get it back inline. |
 | `finish_evidence_session({ sessionId, summary? })` | Closes the context, finalizes `video.webm`, stops tracing (`trace.zip`), writes `network.json` and `manifest.json`, returns counts of console/page/network errors seen. |
 
 A session left open for 10 minutes with no tool calls is auto-finished. The
@@ -75,6 +75,13 @@ than returning a bare Playwright timeout, the error has a compact
 accessibility snapshot of the page auto-attached, so you can usually see
 what actually happened and correct course in the same round-trip instead of
 needing a follow-up `snapshot()`/`evaluate()` call just to find out why.
+
+Playwright's own error text is also cleaned up before it reaches you:
+terminal ANSI color codes are stripped (pure noise outside a terminal), and
+the actionability retry log — which can run to dozens of near-identical
+"waiting for element to be visible, enabled and stable" lines on a slow or
+animating element — is capped at the first few lines plus a count of how
+many were omitted.
 
 ### Browser choice
 
