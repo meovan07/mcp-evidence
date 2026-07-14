@@ -59,12 +59,37 @@ export function registerTools(server: McpServer, sessions: SessionManager): void
               "If it exists, it's loaded so the session starts already signed in. Contains live session " +
               "credentials — store it under a gitignored path, e.g. `.evidence/.auth/some-user.json`.",
           ),
+        device: z
+          .string()
+          .optional()
+          .describe(
+            "Emulate a real mobile/tablet device (viewport, user agent, touch, pixel ratio) instead of a " +
+              "generic desktop window, e.g. \"iPhone 13\", \"Pixel 5\", \"iPad Pro 11\". See Playwright's " +
+              "device list for all options.",
+          ),
+        displayMode: z
+          .enum(["browser", "minimal-ui", "standalone", "fullscreen"])
+          .optional()
+          .describe(
+            "Overrides window.matchMedia() so a PWA's JS install-detection check " +
+              "(matchMedia('(display-mode: standalone)')) reports the given mode, without installing it. " +
+              "Does NOT affect native CSS `@media (display-mode: ...)` rules — no browser API exists to force " +
+              "those (there's no CDP method for it; confirmed by testing). Only useful if the app's JS, not " +
+              "just its CSS, branches on display mode. Can also be changed mid-session with set_display_mode.",
+          ),
       },
     },
-    async ({ featureName, baseUrl, browser, storageStatePath }) => {
-      const session = await sessions.start(featureName, baseUrl, browser, storageStatePath);
+    async ({ featureName, baseUrl, browser, storageStatePath, device, displayMode }) => {
+      const session = await sessions.start({
+        featureName,
+        baseUrl,
+        browserEngine: browser,
+        storageStatePath,
+        device,
+        displayMode,
+      });
       return text(
-        `Started evidence session ${session.id} (${session.browserEngine})` +
+        `Started evidence session ${session.id} (${session.browserEngine}${device ? `, ${device}` : ""})` +
           (session.loadedStorageState ? " [loaded existing storage state, likely pre-authenticated]" : "") +
           `\nEvidence directory: ${session.evidenceDir}`,
       );
@@ -134,6 +159,36 @@ export function registerTools(server: McpServer, sessions: SessionManager): void
   );
 
   server.registerTool(
+    "drag",
+    {
+      title: "Drag and drop",
+      description:
+        "Drags a source element onto a target element, each located by CSS/text `selector` or ARIA " +
+        "`role`+`name`. Fires native HTML5 drag events, so it works with most drag-and-drop libraries " +
+        "(React DnD, Sortable.js, native draggable elements). A few custom implementations that bypass " +
+        "native HTML5 drag events (canvas-based, pointer-events-only) may not respond to this — say so if " +
+        "you hit one and a lower-level mouse-simulation fallback can be added.",
+      inputSchema: {
+        sessionId: z.string(),
+        sourceSelector: z.string().optional(),
+        sourceRole: z.string().optional(),
+        sourceName: z.string().optional().describe("Accessible name, used together with sourceRole"),
+        targetSelector: z.string().optional(),
+        targetRole: z.string().optional(),
+        targetName: z.string().optional().describe("Accessible name, used together with targetRole"),
+        timeout: z.number().optional().describe("Max time to wait for either element, in milliseconds"),
+      },
+    },
+    async ({ sessionId, sourceSelector, sourceRole, sourceName, targetSelector, targetRole, targetName, timeout }) => {
+      const session = sessions.get(sessionId);
+      const source = resolveClickLocator(session.page, { selector: sourceSelector, role: sourceRole, name: sourceName });
+      const target = resolveClickLocator(session.page, { selector: targetSelector, role: targetRole, name: targetName });
+      await source.dragTo(target, { timeout });
+      return text(`Dragged ${sourceSelector ?? sourceRole} to ${targetSelector ?? targetRole}`);
+    },
+  );
+
+  server.registerTool(
     "wait_for",
     {
       title: "Wait for",
@@ -171,6 +226,46 @@ export function registerTools(server: McpServer, sessions: SessionManager): void
       const session = sessions.get(sessionId);
       await session.context.setOffline(offline);
       return text(offline ? "Network set to offline" : "Network restored (online)");
+    },
+  );
+
+  server.registerTool(
+    "set_display_mode",
+    {
+      title: "Set display mode",
+      description:
+        "Mid-session version of start_evidence_session's displayMode param — overrides window.matchMedia() " +
+        "so JS install-detection checks report the given mode. Does NOT affect native CSS `@media " +
+        "(display-mode: ...)` rules (no browser API can force those). Applies to the current page " +
+        "immediately and to subsequent navigate() calls in this session.",
+      inputSchema: {
+        sessionId: z.string(),
+        mode: z.enum(["browser", "minimal-ui", "standalone", "fullscreen"]),
+      },
+    },
+    async ({ sessionId, mode }) => {
+      await sessions.setDisplayMode(sessionId, mode);
+      return text(`window.matchMedia() now reports display-mode: "${mode}" (JS checks only, not CSS)`);
+    },
+  );
+
+  server.registerTool(
+    "evaluate",
+    {
+      title: "Evaluate JavaScript",
+      description:
+        "Runs a JavaScript expression in the page and returns the result (must be JSON-serializable, or " +
+        "undefined). For introspecting state a screenshot can't show: service worker registration " +
+        "(`navigator.serviceWorker.getRegistrations()`), Cache API contents, localStorage, PWA manifest " +
+        "details, feature detection, etc. An async expression/IIFE is fine — it's awaited.",
+      inputSchema: {
+        sessionId: z.string(),
+        script: z.string().min(1).describe('JS expression, e.g. "navigator.serviceWorker.getRegistrations()"'),
+      },
+    },
+    async ({ sessionId, script }) => {
+      const result = await sessions.evaluate(sessionId, script);
+      return text(JSON.stringify(result, null, 2) ?? "undefined");
     },
   );
 

@@ -1,11 +1,41 @@
 import { randomUUID } from "node:crypto";
 import { access, mkdir, readdir, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { type Browser, type BrowserContext, type Page, chromium, firefox, webkit } from "playwright";
+import { type Browser, type BrowserContext, type Page, chromium, devices, firefox, webkit } from "playwright";
 
 export type BrowserEngine = "chromium" | "firefox" | "webkit";
+export type DisplayMode = "browser" | "minimal-ui" | "standalone" | "fullscreen";
 
 const LAUNCHERS = { chromium, firefox, webkit } as const;
+
+// There is no browser-level API (CDP or otherwise) to force the CSS `display-mode` media feature —
+// confirmed by testing every parameter combination of CDP's Emulation.setEmulatedMedia and cross-checking
+// against Puppeteer's docs (which list only prefers-color-scheme/prefers-reduced-motion/color-gamut/
+// forced-colors as supported features). So this only overrides the JS `matchMedia()` function, which
+// fools the common real-world pattern of PWAs checking `matchMedia('(display-mode: standalone)').matches`
+// in JS to detect install state — it does NOT affect native CSS `@media (display-mode: ...)` blocks,
+// since those are evaluated by the browser's CSS engine independently of the JS matchMedia function.
+function displayModeOverrideScript(mode: DisplayMode) {
+  const target = mode;
+  const originalMatchMedia = window.matchMedia.bind(window);
+  window.matchMedia = ((query: string) => {
+    const match = /\(\s*display-mode\s*:\s*([a-z-]+)\s*\)/i.exec(query);
+    if (match) {
+      const matches = match[1] === target;
+      return {
+        matches,
+        media: query,
+        onchange: null,
+        addListener() {},
+        removeListener() {},
+        addEventListener() {},
+        removeEventListener() {},
+        dispatchEvent: () => true,
+      } as MediaQueryList;
+    }
+    return originalMatchMedia(query);
+  }) as typeof window.matchMedia;
+}
 
 export interface ScreenshotRecord {
   name: string;
@@ -41,6 +71,7 @@ export interface EvidenceSession {
   featureName: string;
   baseUrl?: string;
   browserEngine: BrowserEngine;
+  device?: string;
   browser: Browser;
   context: BrowserContext;
   page: Page;
@@ -99,12 +130,16 @@ export class SessionManager {
     return `${index}-${sanitize(name)}.png`;
   }
 
-  async start(
-    featureName: string,
-    baseUrl?: string,
-    browserEngine: BrowserEngine = "chromium",
-    storageStatePath?: string,
-  ): Promise<EvidenceSession> {
+  async start(options: {
+    featureName: string;
+    baseUrl?: string;
+    browserEngine?: BrowserEngine;
+    storageStatePath?: string;
+    device?: string;
+    displayMode?: DisplayMode;
+  }): Promise<EvidenceSession> {
+    const { featureName, baseUrl, storageStatePath, device, displayMode } = options;
+    const browserEngine = options.browserEngine ?? "chromium";
     const id = randomUUID();
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
     const evidenceDir = path.join(process.cwd(), ".evidence", sanitize(featureName), timestamp);
@@ -121,12 +156,30 @@ export class SessionManager {
       }
     }
 
+    let deviceOptions: (typeof devices)[string] | undefined;
+    if (device) {
+      deviceOptions = devices[device];
+      if (!deviceOptions) {
+        throw new Error(
+          `Unknown device: "${device}". See https://github.com/microsoft/playwright/blob/main/packages/playwright-core/src/server/deviceDescriptorsSource.json ` +
+            `for the full list, e.g. "iPhone 13", "Pixel 5", "iPad Pro 11".`,
+        );
+      }
+    }
+
     const browser = await LAUNCHERS[browserEngine].launch();
     const context = await browser.newContext({
+      ...deviceOptions,
       recordVideo: { dir: evidenceDir },
       storageState: loadedStorageState ? resolvedStorageStatePath : undefined,
     });
     await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
+
+    // Registered before the first page/navigation so the override is already in place for
+    // whatever navigate() call comes first, not just future ones.
+    if (displayMode) {
+      await context.addInitScript(displayModeOverrideScript, displayMode);
+    }
     const page = await context.newPage();
 
     const consoleErrors: ConsoleErrorRecord[] = [];
@@ -183,6 +236,7 @@ export class SessionManager {
       featureName,
       baseUrl,
       browserEngine,
+      device,
       browser,
       context,
       page,
@@ -198,6 +252,24 @@ export class SessionManager {
     };
     this.sessions.set(id, session);
     return session;
+  }
+
+  async setDisplayMode(sessionId: string, mode: DisplayMode): Promise<void> {
+    const session = this.get(sessionId);
+    // Registers the override for future navigations in this session, and applies it to whatever
+    // page is already loaded right now too (addInitScript alone only affects future documents).
+    await session.context.addInitScript(displayModeOverrideScript, mode);
+    await session.page.evaluate(displayModeOverrideScript, mode);
+  }
+
+  async drag(sessionId: string, args: { source: string; target: string; timeout?: number }): Promise<void> {
+    const session = this.get(sessionId);
+    await session.page.locator(args.source).dragTo(session.page.locator(args.target), { timeout: args.timeout });
+  }
+
+  async evaluate(sessionId: string, script: string): Promise<unknown> {
+    const session = this.get(sessionId);
+    return session.page.evaluate(script);
   }
 
   async finish(
@@ -293,6 +365,7 @@ export class SessionManager {
       featureName: session.featureName,
       baseUrl: session.baseUrl,
       browserEngine: session.browserEngine,
+      device: session.device,
       startedAt: session.startedAt,
       finishedAt: new Date().toISOString(),
       endReason: reason,

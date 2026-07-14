@@ -48,12 +48,15 @@ Consuming projects should add `.evidence/` to their own `.gitignore`.
 
 | Tool | Purpose |
 |---|---|
-| `start_evidence_session({ featureName, baseUrl?, browser?, storageStatePath? })` | Launches a browser context with video + trace recording on. Returns `sessionId`. |
+| `start_evidence_session({ featureName, baseUrl?, browser?, storageStatePath?, device?, displayMode? })` | Launches a browser context with video + trace recording on. Returns `sessionId`. |
 | `navigate({ sessionId, url })` | Goes to `url` (resolved against `baseUrl` if relative). |
 | `click({ sessionId, selector? , role?, name?, timeout? })` | Clicks an element, located by CSS/text `selector` or ARIA `role`/`name`. |
 | `fill({ sessionId, selector, value, timeout? })` | Fills a form field. |
+| `drag({ sessionId, sourceSelector/Role/Name, targetSelector/Role/Name, timeout? })` | Drags a source element onto a target, firing native HTML5 drag events. |
 | `wait_for({ sessionId, selector?, text?, state?, timeout? })` | Waits for an element to reach a state (default `visible`). |
 | `set_network({ sessionId, offline })` | Simulates losing (`offline: true`) or restoring (`offline: false`) internet connectivity, for testing error banners/retry/reconnect behavior. |
+| `set_display_mode({ sessionId, mode })` | Mid-session version of `displayMode` above — see PWA section below. |
+| `evaluate({ sessionId, script })` | Runs a JS expression in the page, returns the (JSON-serializable) result. |
 | `screenshot({ sessionId, name, fullPage? })` | Saves a PNG immediately into the evidence dir. Survives even if the session later errors. |
 | `finish_evidence_session({ sessionId, summary? })` | Closes the context, finalizes `video.webm`, stops tracing (`trace.zip`), writes `network.json` and `manifest.json`, returns counts of console/page/network errors seen. |
 
@@ -117,6 +120,59 @@ password. Store it under `.evidence/` (already covered by the gitignore
 guidance below) or another path you've confirmed is gitignored, never commit
 it, and use a separate path per test account/user if you're testing more
 than one identity.
+
+### Mobile / tablet emulation (`device`)
+
+Pass a Playwright device name to emulate a real device's viewport, user
+agent, touch support, and pixel ratio instead of a generic desktop window:
+
+```
+start_evidence_session({ featureName: "checkout mobile", baseUrl, device: "iPhone 13" })
+```
+
+Common values: `"iPhone 13"`, `"Pixel 5"`, `"iPad Pro 11"` — see
+[Playwright's device list](https://github.com/microsoft/playwright/blob/main/packages/playwright-core/src/server/deviceDescriptorsSource.json)
+for the full set (includes landscape variants, older devices, etc.). An
+invalid name throws immediately with that link. `manifest.json` records
+which device a session used.
+
+### PWA testing
+
+Two genuinely different things fall under "PWA testing," with different
+support levels here:
+
+- **Offline / service-worker-cache behavior** — fully supported today via
+  `set_network({ sessionId, offline: true })`. This is the actual mechanism
+  a PWA is tested against: does it serve cached content, show a fallback
+  UI, sync back up when reconnected.
+- **"Installed" look/behavior** (`display-mode: standalone`) — **partially**
+  supported, and it's worth understanding the real limitation rather than
+  assuming it's fully covered. There is no browser API — CDP or otherwise —
+  that can force the native CSS `@media (display-mode: standalone)` feature
+  to match (confirmed by testing every parameter combination of Chrome
+  DevTools Protocol's media-emulation command, and cross-checked against
+  Puppeteer's docs, which list only `prefers-color-scheme`,
+  `prefers-reduced-motion`, and `color-gamut` as supported — not
+  `display-mode`). What `displayMode`/`set_display_mode` actually do is
+  override the JS `window.matchMedia()` function, so an app's **JS**
+  install-detection logic (`matchMedia('(display-mode: standalone)').matches`
+  — a common real pattern, e.g. to hide an "Install app" banner once
+  running standalone) reports the requested mode correctly. Any **CSS**
+  written as `@media (display-mode: standalone) { ... }` will not be
+  affected — the browser's CSS engine evaluates that independently of the
+  JS function, and nothing in Playwright or CDP can override it.
+
+```
+start_evidence_session({ featureName: "pwa install banner", baseUrl, displayMode: "standalone" })
+// or mid-session:
+set_display_mode({ sessionId, mode: "standalone" })
+```
+
+For a full pixel-accurate "how does this look actually installed" check —
+CSS included — there's no automatable substitute for genuinely installing
+it (desktop: Chrome's `--app=<url>` launch mode; mobile: an actual
+home-screen install on a real or emulated device), which is outside this
+tool's scope.
 
 ### Example
 
